@@ -44,7 +44,6 @@
 
   <div class="infoRow">
     <div class="infoBox">判定条件（連続3秒）<div class="small">Δ > 25 → 45 / Δ > 50 → 90</div></div>
-    <div class="infoBox">サンプル最大数: <span id="maxPts">300</span></div>
   </div>
 
   <div class="graph-container"><h3>右足 合成値（Vec）</h3><canvas id="graph1" width="720" height="140"></canvas></div>
@@ -57,7 +56,7 @@ const charUUID    = "beb5483e-36e1-4688-b7f5-ea073f74076a";
 
 const maxDataPoints = 300;
 const holdMs = 3000; // 3秒
-const thresh25 = 25;
+const thresh25 = 20;
 const thresh50 = 50;
 
 /* 状態保存 */
@@ -195,8 +194,8 @@ function startCalibration(){
         `初期値設定完了：右(vec:${calibRight.vec.toFixed(2)}) / 左(vec:${calibLeft.vec.toFixed(2)})`;
       // リセット判定タイマー
       exceedStart = {
-        1: {over25: null, over50: null},
-        2: {over25: null, over50: null}
+        1: {over20: null, over50: null},
+        2: {over20: null, over50: null}
       };
     }
   }, 1000);
@@ -232,12 +231,12 @@ function checkThresholds(){
 
   // 閾値25
   if(rightΔ > thresh25){
-    if(!exceedStart[1].over25) exceedStart[1].over25 = now;
-  } else { exceedStart[1].over25 = null; }
+    if(!exceedStart[1].over20) exceedStart[1].over20 = now;
+  } else { exceedStart[1].over20 = null; }
 
   if(leftΔ > thresh25){
-    if(!exceedStart[2].over25) exceedStart[2].over25 = now;
-  } else { exceedStart[2].over25 = null; }
+    if(!exceedStart[2].over20) exceedStart[2].over20 = now;
+  } else { exceedStart[2].over20 = null; }
 
   // 判定結果組み立て（50優先、両方同時の場合は両方表示）
   let labels = [];
@@ -252,10 +251,10 @@ function checkThresholds(){
 
   // 50 なければ 25 判定を確認
   if(labels.length === 0){
-    if(exceedStart[1].over25 && (now - exceedStart[1].over25 >= holdMs)){
+    if(exceedStart[1].over20 && (now - exceedStart[1].over20 >= holdMs)){
       labels.push({side:"右", level:45});
     }
-    if(exceedStart[2].over25 && (now - exceedStart[2].over25 >= holdMs)){
+    if(exceedStart[2].over20 && (now - exceedStart[2].over20 >= holdMs)){
       labels.push({side:"左", level:45});
     }
   }
