@@ -43,7 +43,7 @@
   <div id="styleLabel">組み方: —</div>
 
   <div class="infoRow">
-    <div class="infoBox">判定条件（連続3秒）<div class="small">Δ > 25 → 45 / Δ > 50 → 90</div></div>
+    <div class="infoBox">判定条件（連続3秒）<div class="small">Δ > 20 → 45 / Δ > 50 → 90</div></div>
     <div class="infoBox">サンプル最大数: <span id="maxPts">300</span></div>
   </div>
 
@@ -75,8 +75,8 @@ let isCalibrated = false;
 
 /* 連続判定用タイムスタンプ（閾値を満たし始めた時刻） */
 let exceedStart = {
-  1: {over25: null, over50: null},
-  2: {over25: null, over50: null}
+  1: {over20: null, over50: null},
+  2: {over20: null, over50: null}
 };
 
 /* UI 初期化 */
@@ -195,8 +195,8 @@ function startCalibration(){
         `初期値設定完了：右(vec:${calibRight.vec.toFixed(2)}) / 左(vec:${calibLeft.vec.toFixed(2)})`;
       // リセット判定タイマー
       exceedStart = {
-        1: {over25: null, over50: null},
-        2: {over25: null, over50: null}
+        1: {over20: null, over50: null},
+        2: {over20: null, over50: null}
       };
     }
   }, 1000);
@@ -231,13 +231,13 @@ function checkThresholds(){
   } else { exceedStart[2].over50 = null; }
 
   // 閾値25
-  if(rightΔ > thresh25){
-    if(!exceedStart[1].over25) exceedStart[1].over25 = now;
-  } else { exceedStart[1].over25 = null; }
+  if(rightΔ > thresh20){
+    if(!exceedStart[1].over20) exceedStart[1].over20 = now;
+  } else { exceedStart[1].over20 = null; }
 
-  if(leftΔ > thresh25){
-    if(!exceedStart[2].over25) exceedStart[2].over25 = now;
-  } else { exceedStart[2].over25 = null; }
+  if(leftΔ > thresh20){
+    if(!exceedStart[2].over20) exceedStart[2].over20 = now;
+  } else { exceedStart[2].over20 = null; }
 
   // 判定結果組み立て（50優先、両方同時の場合は両方表示）
   let labels = [];
@@ -252,10 +252,10 @@ function checkThresholds(){
 
   // 50 なければ 25 判定を確認
   if(labels.length === 0){
-    if(exceedStart[1].over25 && (now - exceedStart[1].over25 >= holdMs)){
+    if(exceedStart[1].over20 && (now - exceedStart[1].over20 >= holdMs)){
       labels.push({side:"右", level:45});
     }
-    if(exceedStart[2].over25 && (now - exceedStart[2].over25 >= holdMs)){
+    if(exceedStart[2].over20 && (now - exceedStart[2].over20 >= holdMs)){
       labels.push({side:"左", level:45});
     }
   }
