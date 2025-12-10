@@ -43,7 +43,7 @@
   <div id="styleLabel">組み方: —</div>
 
   <div class="infoRow">
-    <div class="infoBox">判定条件（連続3秒）<div class="small">Δ > 25 → 45 / Δ > 50 → 90</div></div>
+    <div class="infoBox">判定条件（連続3秒）<div class="small">Δ > 20 → 45 / Δ > 50 → 90</div></div>
   </div>
 
   <div class="graph-container"><h3>右足 合成値（Vec）</h3><canvas id="graph1" width="720" height="140"></canvas></div>
@@ -56,7 +56,7 @@ const charUUID    = "beb5483e-36e1-4688-b7f5-ea073f74076a";
 
 const maxDataPoints = 300;
 const holdMs = 3000; // 3秒
-const thresh25 = 20;
+const thresh25 = 20;   // ★ここだけ変更（25→20）
 const thresh50 = 50;
 
 /* 状態保存 */
@@ -65,21 +65,18 @@ let latestRight = {pitch:0, roll:0};
 let latestLeft  = {pitch:0, roll:0};
 
 let dataVec = {1:[], 2:[]}; // 合成値配列（グラフ用）
-let timestamps = {1:[], 2:[]}; // 時刻配列（必要なら）
+let timestamps = {1:[], 2:[]};
 let accelData = [["Time","Right_Pitch","Right_Roll","Right_Vec","Right_Δ","Left_Pitch","Left_Roll","Left_Vec","Left_Δ","angleLevel"]];
 
 let calibRight = {pitch:0, roll:0, vec:0};
 let calibLeft  = {pitch:0, roll:0, vec:0};
 let isCalibrated = false;
 
-/* 連続判定用タイムスタンプ（閾値を満たし始めた時刻） */
+/* 連続判定用タイムスタンプ */
 let exceedStart = {
-  1: {over25: null, over50: null},
-  2: {over25: null, over50: null}
+  1: {over20: null, over50: null},
+  2: {over20: null, over50: null}
 };
-
-/* UI 初期化 */
-document.getElementById("maxPts").textContent = maxDataPoints;
 
 /* ---------- BLE 接続 ---------- */
 async function connect(id){
@@ -97,7 +94,6 @@ async function connect(id){
     await char.startNotifications();
     char.addEventListener("characteristicvaluechanged", e=>{
       const text = new TextDecoder().decode(e.target.value).trim();
-      // 期待される形式: "pitch,roll" （カンマ区切り）
       const parts = text.split(",").map(s=>s.trim());
       if(parts.length >= 2){
         const p = parseFloat(parts[0]) || 0;
@@ -109,29 +105,30 @@ async function connect(id){
           latestLeft.pitch = p; latestLeft.roll = r;
           updateLeft();
         }
-        // Excel 用データ追加（毎受信）
+
         const rightVec = vecFrom(latestRight.pitch, latestRight.roll);
         const leftVec  = vecFrom(latestLeft.pitch, latestLeft.roll);
         const rightΔ = isCalibrated ? rightVec - calibRight.vec : 0;
         const leftΔ  = isCalibrated ? leftVec  - calibLeft.vec  : 0;
+
         accelData.push([
           new Date().toLocaleTimeString(),
           latestRight.pitch, latestRight.roll, rightVec.toFixed(3), rightΔ.toFixed(3),
           latestLeft.pitch, latestLeft.roll, leftVec.toFixed(3), leftΔ.toFixed(3),
-          getCurrentAngleLabel() // 最新の表示ラベル
+          getCurrentAngleLabel()
         ]);
-        // 判定実行
+
         checkThresholds();
       }
     });
     document.getElementById("status"+id).textContent = `:✓: ${id===1 ? "右足" : "左足"} 接続成功`;
   } catch(err){
-    document.getElementById("status"+id).textContent = ":✕: 接続失敗: " + (err && err.message ? err.message : err);
+    document.getElementById("status"+id).textContent = ":✕: 接続失敗: " + (err?.message || err);
     btn.disabled = false;
   }
 }
 
-/* ---------- 合成値（vector）計算 ---------- */
+/* ---------- 合成値 ---------- */
 function vecFrom(p, r){
   return Math.hypot(p, r);
 }
@@ -142,7 +139,7 @@ function updateRight(){
   const v = vecFrom(p,r);
   dataVec[1].push(v);
   timestamps[1].push(Date.now());
-  if(dataVec[1].length > maxDataPoints) { dataVec[1].shift(); timestamps[1].shift(); }
+  if(dataVec[1].length > maxDataPoints){ dataVec[1].shift(); timestamps[1].shift(); }
   const delta = isCalibrated ? (v - calibRight.vec) : 0;
   document.getElementById("values1").textContent =
     `Pitch:${p.toFixed(2)} Roll:${r.toFixed(2)} Vec:${v.toFixed(2)} Δ:${delta.toFixed(2)}`;
@@ -154,7 +151,7 @@ function updateLeft(){
   const v = vecFrom(p,r);
   dataVec[2].push(v);
   timestamps[2].push(Date.now());
-  if(dataVec[2].length > maxDataPoints) { dataVec[2].shift(); timestamps[2].shift(); }
+  if(dataVec[2].length > maxDataPoints){ dataVec[2].shift(); timestamps[2].shift(); }
   const delta = isCalibrated ? (v - calibLeft.vec) : 0;
   document.getElementById("values2").textContent =
     `Pitch:${p.toFixed(2)} Roll:${r.toFixed(2)} Vec:${v.toFixed(2)} Δ:${delta.toFixed(2)}`;
@@ -163,7 +160,6 @@ function updateLeft(){
 
 /* ---------- キャリブレーション ---------- */
 function startCalibration(){
-  // 10秒間最新値をサンプルして平均をとる（right/left別）
   const calibSec = 10;
   let sec = calibSec;
   document.getElementById("calibStatus").textContent = `キャリブレーション開始… ${sec}秒`;
@@ -175,24 +171,20 @@ function startCalibration(){
     document.getElementById("calibStatus").textContent = `キャリブレーション中… ${sec}秒`;
     if(sec <= 0){
       clearInterval(timer);
-      if(samplesR.length > 0){
-        const avgPR = avg(samplesR.map(s=>s[0]));
-        const avgRR = avg(samplesR.map(s=>s[1]));
-        calibRight.pitch = avgPR;
-        calibRight.roll  = avgRR;
-        calibRight.vec   = vecFrom(avgPR, avgRR);
+      if(samplesR.length){
+        const ap = avg(samplesR.map(s=>s[0]));
+        const ar = avg(samplesR.map(s=>s[1]));
+        calibRight.pitch = ap; calibRight.roll = ar; calibRight.vec = vecFrom(ap,ar);
       }
-      if(samplesL.length > 0){
-        const avgPL = avg(samplesL.map(s=>s[0]));
-        const avgRL = avg(samplesL.map(s=>s[1]));
-        calibLeft.pitch = avgPL;
-        calibLeft.roll  = avgRL;
-        calibLeft.vec   = vecFrom(avgPL, avgRL);
+      if(samplesL.length){
+        const ap = avg(samplesL.map(s=>s[0]));
+        const ar = avg(samplesL.map(s=>s[1]));
+        calibLeft.pitch = ap; calibLeft.roll = ar; calibLeft.vec = vecFrom(ap,ar);
       }
       isCalibrated = true;
       document.getElementById("calibStatus").textContent =
         `初期値設定完了：右(vec:${calibRight.vec.toFixed(2)}) / 左(vec:${calibLeft.vec.toFixed(2)})`;
-      // リセット判定タイマー
+
       exceedStart = {
         1: {over20: null, over50: null},
         2: {over20: null, over50: null}
@@ -201,9 +193,9 @@ function startCalibration(){
   }, 1000);
 }
 
-function avg(arr){ if(!arr || arr.length===0) return 0; return arr.reduce((a,b)=>a+b,0)/arr.length; }
+function avg(arr){ return arr.reduce((a,b)=>a+b,0)/arr.length; }
 
-/* ---------- 判定ロジック（Δベースで3秒連続） ---------- */
+/* ---------- 判定ロジック ---------- */
 function checkThresholds(){
   if(!isCalibrated){
     document.getElementById("result").textContent = "状態: キャリブレーション未実施";
@@ -212,15 +204,13 @@ function checkThresholds(){
   }
 
   const now = Date.now();
-  // 右
   const rightVec = vecFrom(latestRight.pitch, latestRight.roll);
-  const rightΔ = rightVec - calibRight.vec;
-  // 左
   const leftVec  = vecFrom(latestLeft.pitch, latestLeft.roll);
-  const leftΔ = leftVec - calibLeft.vec;
 
-  // 閾値50 (優先)
-  // 右側 50 超え開始/リセット
+  const rightΔ = rightVec - calibRight.vec;
+  const leftΔ  = leftVec - calibLeft.vec;
+
+  /* --- 閾値50 --- */
   if(rightΔ > thresh50){
     if(!exceedStart[1].over50) exceedStart[1].over50 = now;
   } else { exceedStart[1].over50 = null; }
@@ -229,7 +219,7 @@ function checkThresholds(){
     if(!exceedStart[2].over50) exceedStart[2].over50 = now;
   } else { exceedStart[2].over50 = null; }
 
-  // 閾値25
+  /* --- 閾値20（45°） --- */
   if(rightΔ > thresh25){
     if(!exceedStart[1].over20) exceedStart[1].over20 = now;
   } else { exceedStart[1].over20 = null; }
@@ -238,10 +228,10 @@ function checkThresholds(){
     if(!exceedStart[2].over20) exceedStart[2].over20 = now;
   } else { exceedStart[2].over20 = null; }
 
-  // 判定結果組み立て（50優先、両方同時の場合は両方表示）
+  /* --- 判定 --- */
   let labels = [];
 
-  // 50判定チェック（3秒連続）
+  // ★90° 優先
   if(exceedStart[1].over50 && (now - exceedStart[1].over50 >= holdMs)){
     labels.push({side:"右", level:90});
   }
@@ -249,7 +239,7 @@ function checkThresholds(){
     labels.push({side:"左", level:90});
   }
 
-  // 50 なければ 25 判定を確認
+  // ★50が無ければ45°を見る
   if(labels.length === 0){
     if(exceedStart[1].over20 && (now - exceedStart[1].over20 >= holdMs)){
       labels.push({side:"右", level:45});
@@ -259,15 +249,15 @@ function checkThresholds(){
     }
   }
 
-  // 表示更新
+  /* --- 表示 --- */
   const resultEl = document.getElementById("result");
   const styleEl  = document.getElementById("styleLabel");
+
   if(labels.length === 0){
     resultEl.textContent = "状態: 足を組んでいません";
     resultEl.style.background = "#C8E6C9";
     styleEl.textContent = "組み方: —";
   } else {
-    // 複数あればカンマ区切りで表示（例：右 90 / 左 45）
     const txt = labels.map(l=>`${l.side} ${l.level}`).join(" / ");
     resultEl.textContent = `状態: 足を組んでいます (${txt})`;
     resultEl.style.background = "#FFCCBC";
@@ -275,24 +265,20 @@ function checkThresholds(){
   }
 }
 
-/* ヘルパー：最新の angleLabel（Excel 行用） */
 function getCurrentAngleLabel(){
-  const s = document.getElementById("styleLabel").textContent;
-  return s || "";
+  return document.getElementById("styleLabel").textContent;
 }
 
-/* ---------- グラフ描画（合成値） ---------- */
+/* ---------- グラフ描画 ---------- */
 function drawGraph(id){
   const canvas = document.getElementById("graph"+id);
   const ctx = canvas.getContext("2d");
   const w = canvas.width, h = canvas.height;
   ctx.clearRect(0,0,w,h);
 
-  // 背景
   ctx.fillStyle = "#E0F2F1";
   ctx.fillRect(0,0,w,h);
 
-  // 中央ライン
   ctx.strokeStyle = "#004D40";
   ctx.beginPath();
   ctx.moveTo(0, h/2);
@@ -302,31 +288,27 @@ function drawGraph(id){
   const data = dataVec[id];
   if(!data || data.length < 2) return;
 
-  // スケール：最大値を利用（少なくとも 1）
   const maxVal = Math.max(...data.map(v=>Math.abs(v)), 1);
   const padding = 8;
   const scale = (h/2 - padding) / maxVal;
 
-  // 線の色：右は赤系、左は青系
   ctx.strokeStyle = (id===1) ? "#FF5252" : "#2979FF";
   ctx.lineWidth = 2;
   ctx.beginPath();
-  const len = data.length;
-  for(let i=0;i<len;i++){
+
+  for(let i=0;i<data.length;i++){
     const x = (i/(maxDataPoints-1)) * w;
     const y = h/2 - (data[i] * scale);
     if(i===0) ctx.moveTo(x,y); else ctx.lineTo(x,y);
   }
   ctx.stroke();
 
-  // 現在値テキスト
   ctx.fillStyle = "#004D40";
   ctx.font = "12px Arial";
-  const last = data[data.length-1];
-  ctx.fillText(`Vec: ${last.toFixed(2)}`, 8, 14);
+  ctx.fillText(`Vec: ${data[data.length-1].toFixed(2)}`, 8, 14);
 }
 
-/* ---------- Excel 出力 ---------- */
+/* ---------- Excel ---------- */
 function downloadExcel(){
   const wb = XLSX.utils.book_new();
   const ws = XLSX.utils.aoa_to_sheet(accelData);
@@ -334,19 +316,15 @@ function downloadExcel(){
   XLSX.writeFile(wb, "accel_vec_delta_angleLevel.xlsx");
 }
 
-/* ---------- utility: ライフサイクルでグラフを定期更新する（万一描画が必要なとき） ---------- */
+/* ---------- update loop ---------- */
 setInterval(()=>{
-  // グラフを60fpsではなく定期的に更新（描画負荷を下げる）
   drawGraph(1);
   drawGraph(2);
-  // そして閾値判定（時間ベースで確実にチェック）
   if(isCalibrated) checkThresholds();
 }, 200);
 
-/* ---------- 初期描画（空データ） ---------- */
 drawGraph(1);
 drawGraph(2);
-
 </script>
 </body>
 </html>
