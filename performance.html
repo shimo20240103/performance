@@ -1,145 +1,353 @@
 <!DOCTYPE html>
 <html lang="ja">
 <head>
-  <meta charset="UTF-8">
-  <title>M5StickC 足組み判定（合成値ベース）</title>
-
+  <meta charset="UTF-8" />
+  <title>M5StickC 足組み判定（改良版：合成値Δベース）</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
   <style>
-    body { font-family: 'Arial', sans-serif; background:#eaf7f3; color:#004d40; text-align:center; margin:0; padding:0; }
-    h1 { background:#a7ffeb; margin:0; padding:15px; }
-    #status { font-size: 30px; font-weight: bold; margin: 20px; }
-    #connectBtn { padding: 14px 24px; background:#009688; color:white; border:none; border-radius:12px; font-size:18px; cursor:pointer; }
-    .graph-container { display:flex; justify-content:space-around; margin:20px; }
-    canvas { background:white; border-radius:12px; }
+    body { font-family: 'Arial', sans-serif; background:#eaf7f3; color:#004d40; text-align:center; margin:0; padding:12px; }
+    h1 { background:#a7ffeb; margin:0 0 12px 0; padding:16px 0; border-radius:10px; }
+    .controls { margin:10px 0; }
+    button { font-size:14px; padding:8px 14px; margin:6px; border-radius:8px; border:none; background:#26a69a; color:#fff; cursor:pointer;}
+    #status1,#status2,#result,#styleLabel,#calibStatus { margin-top:8px; font-weight:bold; font-size:16px; display:block; }
+    pre { display:inline-block; background:#b2dfdb; padding:8px 14px; border-radius:10px; margin-top:10px; }
+    .infoRow{ display:flex; justify-content:center; gap:12px; margin-top:8px; flex-wrap:wrap;}
+    .infoBox{ background:#fff; padding:8px 12px; border-radius:8px; box-shadow:0 2px 6px rgba(0,0,0,0.06); min-width:140px; }
+    canvas{ border:2px solid #004D40; border-radius:8px; background:#e0f2f1; display:block; margin:8px auto; }
+    .graph-container{ margin:12px auto; width:90%; max-width:720px; }
+    #result { padding:8px 12px; border-radius:8px; background:#FFF; display:inline-block; }
+    #styleLabel { margin-top:6px; }
+    .small { font-size:13px; font-weight:normal; color:#004D40; }
   </style>
-
+  <script src="https://cdn.jsdelivr.net/npm/xlsx/dist/xlsx.full.min.js"></script>
 </head>
 <body>
+  <h1>M5StickC 足組み判定（合成値Δベース・改良版）</h1>
 
-  <h1>M5StickC 足組み判定（合成値ベース）</h1>
-  <button id="connectBtn">M5StickC と接続</button>
-
-  <div id="status">未接続</div>
-
-  <div class="graph-container">
-    <div>
-      <p>右足 合成値</p>
-      <canvas id="rightChart" width="350" height="200"></canvas>
-    </div>
-    <div>
-      <p>左足 合成値</p>
-      <canvas id="leftChart" width="350" height="200"></canvas>
-    </div>
+  <div class="controls">
+    <button id="connectBtn1" onclick="connect(1)">右足 接続</button>
+    <button id="connectBtn2" onclick="connect(2)">左足 接続</button>
+    <button onclick="startCalibration()">初期値キャリブレーション (10秒)</button>
+    <button onclick="downloadExcel()">Excelダウンロード</button>
   </div>
 
-  <p id="judge" style="font-size:28px; font-weight:bold; margin-top:20px;">判定：なし</p>
+  <div id="status1">右足: 未接続</div>
+  <pre id="values1">Pitch:0.00 Roll:0.00 Vec:0.00 Δ:0.00</pre>
 
-  <script>
+  <div id="status2">左足: 未接続</div>
+  <pre id="values2">Pitch:0.00 Roll:0.00 Vec:0.00 Δ:0.00</pre>
 
-    let device, characteristic;
+  <div id="calibStatus">初期値: 未キャリブレーション</div>
 
-    // ▼ 判定閾値
-    const threshold45 = 20;   // ←ここを 20 に変更
-    const threshold90 = 50;
+  <div id="result">状態: —</div>
+  <div id="styleLabel">組み方: —</div>
 
-    // ▼ 3秒カウンター
-    let rightCount45 = 0, leftCount45 = 0;
-    let rightCount90 = 0, leftCount90 = 0;
+  <div class="infoRow">
+    <div class="infoBox">判定条件（連続3秒）<div class="small">Δ > 25 → 45 / Δ > 50 → 90</div></div>
+    <div class="infoBox">サンプル最大数: <span id="maxPts">300</span></div>
+  </div>
 
-    // ▼ グラフ用バッファ
-    let rightData = [];
-    let leftData = [];
-    const maxPoints = 50;
+  <div class="graph-container"><h3>右足 合成値（Vec）</h3><canvas id="graph1" width="720" height="140"></canvas></div>
+  <div class="graph-container"><h3>左足 合成値（Vec）</h3><canvas id="graph2" width="720" height="140"></canvas></div>
 
-    // ▼ グラフ描画
-    const rightCtx = document.getElementById("rightChart").getContext("2d");
-    const leftCtx  = document.getElementById("leftChart").getContext("2d");
+<script>
+/* ---------- 設定 ---------- */
+const serviceUUID = "4fafc201-1fb5-459e-8fcc-c5c9c331914b";
+const charUUID    = "beb5483e-36e1-4688-b7f5-ea073f74076a";
 
-    function drawGraph(ctx, data) {
-        ctx.clearRect(0,0,350,200);
-        ctx.beginPath();
-        ctx.moveTo(0, 200 - data[0]);
+const maxDataPoints = 300;
+const holdMs = 3000; // 3秒
+const thresh25 = 25;
+const thresh50 = 50;
 
-        for (let i = 1; i < data.length; i++) {
-            ctx.lineTo(i * (350/maxPoints), 200 - data[i]);
+/* 状態保存 */
+let devices = {};
+let latestRight = {pitch:0, roll:0};
+let latestLeft  = {pitch:0, roll:0};
+
+let dataVec = {1:[], 2:[]}; // 合成値配列（グラフ用）
+let timestamps = {1:[], 2:[]}; // 時刻配列（必要なら）
+let accelData = [["Time","Right_Pitch","Right_Roll","Right_Vec","Right_Δ","Left_Pitch","Left_Roll","Left_Vec","Left_Δ","angleLevel"]];
+
+let calibRight = {pitch:0, roll:0, vec:0};
+let calibLeft  = {pitch:0, roll:0, vec:0};
+let isCalibrated = false;
+
+/* 連続判定用タイムスタンプ（閾値を満たし始めた時刻） */
+let exceedStart = {
+  1: {over25: null, over50: null},
+  2: {over25: null, over50: null}
+};
+
+/* UI 初期化 */
+document.getElementById("maxPts").textContent = maxDataPoints;
+
+/* ---------- BLE 接続 ---------- */
+async function connect(id){
+  const btn = document.getElementById("connectBtn"+id);
+  btn.disabled = true;
+  try{
+    const device = await navigator.bluetooth.requestDevice({
+      acceptAllDevices:true,
+      optionalServices:[serviceUUID]
+    });
+    devices[id] = device;
+    const server = await device.gatt.connect();
+    const service = await server.getPrimaryService(serviceUUID);
+    const char = await service.getCharacteristic(charUUID);
+    await char.startNotifications();
+    char.addEventListener("characteristicvaluechanged", e=>{
+      const text = new TextDecoder().decode(e.target.value).trim();
+      // 期待される形式: "pitch,roll" （カンマ区切り）
+      const parts = text.split(",").map(s=>s.trim());
+      if(parts.length >= 2){
+        const p = parseFloat(parts[0]) || 0;
+        const r = parseFloat(parts[1]) || 0;
+        if(id === 1){
+          latestRight.pitch = p; latestRight.roll = r;
+          updateRight();
+        } else {
+          latestLeft.pitch = p; latestLeft.roll = r;
+          updateLeft();
         }
-        ctx.stroke();
-    }
-
-    // ▼ BLE 接続
-    document.getElementById("connectBtn").onclick = async () => {
-      try {
-        device = await navigator.bluetooth.requestDevice({
-          filters: [{ services: ["4fafc201-1fb5-459e-8fcc-c5c9c331914b"] }]
-        });
-
-        const server = await device.gatt.connect();
-        const service = await server.getPrimaryService("4fafc201-1fb5-459e-8fcc-c5c9c331914b");
-        characteristic = await service.getCharacteristic("beb5483e-36e1-4688-b7f5-ea073f74076a");
-
-        await characteristic.startNotifications();
-        characteristic.addEventListener("characteristicvaluechanged", onData);
-        document.getElementById("status").textContent = "接続完了";
-
-      } catch(e) {
-        alert("接続失敗: " + e);
+        // Excel 用データ追加（毎受信）
+        const rightVec = vecFrom(latestRight.pitch, latestRight.roll);
+        const leftVec  = vecFrom(latestLeft.pitch, latestLeft.roll);
+        const rightΔ = isCalibrated ? rightVec - calibRight.vec : 0;
+        const leftΔ  = isCalibrated ? leftVec  - calibLeft.vec  : 0;
+        accelData.push([
+          new Date().toLocaleTimeString(),
+          latestRight.pitch, latestRight.roll, rightVec.toFixed(3), rightΔ.toFixed(3),
+          latestLeft.pitch, latestLeft.roll, leftVec.toFixed(3), leftΔ.toFixed(3),
+          getCurrentAngleLabel() // 最新の表示ラベル
+        ]);
+        // 判定実行
+        checkThresholds();
       }
-    };
+    });
+    document.getElementById("status"+id).textContent = `:✓: ${id===1 ? "右足" : "左足"} 接続成功`;
+  } catch(err){
+    document.getElementById("status"+id).textContent = ":✕: 接続失敗: " + (err && err.message ? err.message : err);
+    btn.disabled = false;
+  }
+}
 
-    // ▼ データ受信処理
-    function onData(event) {
-      let text = new TextDecoder().decode(event.target.value);
-      let s = text.split(",");
+/* ---------- 合成値（vector）計算 ---------- */
+function vecFrom(p, r){
+  return Math.hypot(p, r);
+}
 
-      if (s.length < 4) return;
+/* ---------- 更新表示（右/左） ---------- */
+function updateRight(){
+  const p = latestRight.pitch, r = latestRight.roll;
+  const v = vecFrom(p,r);
+  dataVec[1].push(v);
+  timestamps[1].push(Date.now());
+  if(dataVec[1].length > maxDataPoints) { dataVec[1].shift(); timestamps[1].shift(); }
+  const delta = isCalibrated ? (v - calibRight.vec) : 0;
+  document.getElementById("values1").textContent =
+    `Pitch:${p.toFixed(2)} Roll:${r.toFixed(2)} Vec:${v.toFixed(2)} Δ:${delta.toFixed(2)}`;
+  drawGraph(1);
+}
 
-      let pitchR = parseFloat(s[0]);
-      let rollR  = parseFloat(s[1]);
-      let pitchL = parseFloat(s[2]);
-      let rollL  = parseFloat(s[3]);
+function updateLeft(){
+  const p = latestLeft.pitch, r = latestLeft.roll;
+  const v = vecFrom(p,r);
+  dataVec[2].push(v);
+  timestamps[2].push(Date.now());
+  if(dataVec[2].length > maxDataPoints) { dataVec[2].shift(); timestamps[2].shift(); }
+  const delta = isCalibrated ? (v - calibLeft.vec) : 0;
+  document.getElementById("values2").textContent =
+    `Pitch:${p.toFixed(2)} Roll:${r.toFixed(2)} Vec:${v.toFixed(2)} Δ:${delta.toFixed(2)}`;
+  drawGraph(2);
+}
 
-      // 合成値計算
-      let rightVec = Math.sqrt(pitchR*pitchR + rollR*rollR);
-      let leftVec  = Math.sqrt(pitchL*pitchL + rollL*rollL);
-
-      // --- グラフ更新 ---
-      rightData.push(rightVec);
-      leftData.push(leftVec);
-
-      if (rightData.length > maxPoints) rightData.shift();
-      if (leftData.length > maxPoints) leftData.shift();
-
-      drawGraph(rightCtx, rightData);
-      drawGraph(leftCtx, leftData);
-
-      // --- 判定処理 ---
-      judgeAngle(rightVec, leftVec);
-    }
-
-    function judgeAngle(r, l) {
-      let result = "なし";
-
-      // ▼ 90度（50以上・3秒）
-      if (r > threshold90) rightCount90++; else rightCount90 = 0;
-      if (l > threshold90) leftCount90++;  else leftCount90 = 0;
-
-      if (rightCount90 >= 3) result = "右 90°";
-      if (leftCount90  >= 3) result = "左 90°";
-
-      // ▼ 45度（20以上・3秒）
-      // ※ 90°が勝つので最後に書かない
-      if (r > threshold45) rightCount45++; else rightCount45 = 0;
-      if (l > threshold45) leftCount45++;  else leftCount45 = 0;
-
-      if (result === "なし") {
-        if (rightCount45 >= 3) result = "右 45°";
-        if (leftCount45  >= 3) result = "左 45°";
+/* ---------- キャリブレーション ---------- */
+function startCalibration(){
+  // 10秒間最新値をサンプルして平均をとる（right/left別）
+  const calibSec = 10;
+  let sec = calibSec;
+  document.getElementById("calibStatus").textContent = `キャリブレーション開始… ${sec}秒`;
+  let samplesR = [], samplesL = [];
+  const timer = setInterval(()=>{
+    sec--;
+    samplesR.push([latestRight.pitch, latestRight.roll]);
+    samplesL.push([latestLeft.pitch, latestLeft.roll]);
+    document.getElementById("calibStatus").textContent = `キャリブレーション中… ${sec}秒`;
+    if(sec <= 0){
+      clearInterval(timer);
+      if(samplesR.length > 0){
+        const avgPR = avg(samplesR.map(s=>s[0]));
+        const avgRR = avg(samplesR.map(s=>s[1]));
+        calibRight.pitch = avgPR;
+        calibRight.roll  = avgRR;
+        calibRight.vec   = vecFrom(avgPR, avgRR);
       }
-
-      document.getElementById("judge").textContent = "判定：" + result;
+      if(samplesL.length > 0){
+        const avgPL = avg(samplesL.map(s=>s[0]));
+        const avgRL = avg(samplesL.map(s=>s[1]));
+        calibLeft.pitch = avgPL;
+        calibLeft.roll  = avgRL;
+        calibLeft.vec   = vecFrom(avgPL, avgRL);
+      }
+      isCalibrated = true;
+      document.getElementById("calibStatus").textContent =
+        `初期値設定完了：右(vec:${calibRight.vec.toFixed(2)}) / 左(vec:${calibLeft.vec.toFixed(2)})`;
+      // リセット判定タイマー
+      exceedStart = {
+        1: {over25: null, over50: null},
+        2: {over25: null, over50: null}
+      };
     }
+  }, 1000);
+}
 
-  </script>
+function avg(arr){ if(!arr || arr.length===0) return 0; return arr.reduce((a,b)=>a+b,0)/arr.length; }
 
+/* ---------- 判定ロジック（Δベースで3秒連続） ---------- */
+function checkThresholds(){
+  if(!isCalibrated){
+    document.getElementById("result").textContent = "状態: キャリブレーション未実施";
+    document.getElementById("styleLabel").textContent = "組み方: —";
+    return;
+  }
+
+  const now = Date.now();
+  // 右
+  const rightVec = vecFrom(latestRight.pitch, latestRight.roll);
+  const rightΔ = rightVec - calibRight.vec;
+  // 左
+  const leftVec  = vecFrom(latestLeft.pitch, latestLeft.roll);
+  const leftΔ = leftVec - calibLeft.vec;
+
+  // 閾値50 (優先)
+  // 右側 50 超え開始/リセット
+  if(rightΔ > thresh50){
+    if(!exceedStart[1].over50) exceedStart[1].over50 = now;
+  } else { exceedStart[1].over50 = null; }
+
+  if(leftΔ > thresh50){
+    if(!exceedStart[2].over50) exceedStart[2].over50 = now;
+  } else { exceedStart[2].over50 = null; }
+
+  // 閾値25
+  if(rightΔ > thresh25){
+    if(!exceedStart[1].over25) exceedStart[1].over25 = now;
+  } else { exceedStart[1].over25 = null; }
+
+  if(leftΔ > thresh25){
+    if(!exceedStart[2].over25) exceedStart[2].over25 = now;
+  } else { exceedStart[2].over25 = null; }
+
+  // 判定結果組み立て（50優先、両方同時の場合は両方表示）
+  let labels = [];
+
+  // 50判定チェック（3秒連続）
+  if(exceedStart[1].over50 && (now - exceedStart[1].over50 >= holdMs)){
+    labels.push({side:"右", level:90});
+  }
+  if(exceedStart[2].over50 && (now - exceedStart[2].over50 >= holdMs)){
+    labels.push({side:"左", level:90});
+  }
+
+  // 50 なければ 25 判定を確認
+  if(labels.length === 0){
+    if(exceedStart[1].over25 && (now - exceedStart[1].over25 >= holdMs)){
+      labels.push({side:"右", level:45});
+    }
+    if(exceedStart[2].over25 && (now - exceedStart[2].over25 >= holdMs)){
+      labels.push({side:"左", level:45});
+    }
+  }
+
+  // 表示更新
+  const resultEl = document.getElementById("result");
+  const styleEl  = document.getElementById("styleLabel");
+  if(labels.length === 0){
+    resultEl.textContent = "状態: 足を組んでいません";
+    resultEl.style.background = "#C8E6C9";
+    styleEl.textContent = "組み方: —";
+  } else {
+    // 複数あればカンマ区切りで表示（例：右 90 / 左 45）
+    const txt = labels.map(l=>`${l.side} ${l.level}`).join(" / ");
+    resultEl.textContent = `状態: 足を組んでいます (${txt})`;
+    resultEl.style.background = "#FFCCBC";
+    styleEl.textContent = `組み方: ${txt}`;
+  }
+}
+
+/* ヘルパー：最新の angleLabel（Excel 行用） */
+function getCurrentAngleLabel(){
+  const s = document.getElementById("styleLabel").textContent;
+  return s || "";
+}
+
+/* ---------- グラフ描画（合成値） ---------- */
+function drawGraph(id){
+  const canvas = document.getElementById("graph"+id);
+  const ctx = canvas.getContext("2d");
+  const w = canvas.width, h = canvas.height;
+  ctx.clearRect(0,0,w,h);
+
+  // 背景
+  ctx.fillStyle = "#E0F2F1";
+  ctx.fillRect(0,0,w,h);
+
+  // 中央ライン
+  ctx.strokeStyle = "#004D40";
+  ctx.beginPath();
+  ctx.moveTo(0, h/2);
+  ctx.lineTo(w, h/2);
+  ctx.stroke();
+
+  const data = dataVec[id];
+  if(!data || data.length < 2) return;
+
+  // スケール：最大値を利用（少なくとも 1）
+  const maxVal = Math.max(...data.map(v=>Math.abs(v)), 1);
+  const padding = 8;
+  const scale = (h/2 - padding) / maxVal;
+
+  // 線の色：右は赤系、左は青系
+  ctx.strokeStyle = (id===1) ? "#FF5252" : "#2979FF";
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  const len = data.length;
+  for(let i=0;i<len;i++){
+    const x = (i/(maxDataPoints-1)) * w;
+    const y = h/2 - (data[i] * scale);
+    if(i===0) ctx.moveTo(x,y); else ctx.lineTo(x,y);
+  }
+  ctx.stroke();
+
+  // 現在値テキスト
+  ctx.fillStyle = "#004D40";
+  ctx.font = "12px Arial";
+  const last = data[data.length-1];
+  ctx.fillText(`Vec: ${last.toFixed(2)}`, 8, 14);
+}
+
+/* ---------- Excel 出力 ---------- */
+function downloadExcel(){
+  const wb = XLSX.utils.book_new();
+  const ws = XLSX.utils.aoa_to_sheet(accelData);
+  XLSX.utils.book_append_sheet(wb, ws, "PitchRoll");
+  XLSX.writeFile(wb, "accel_vec_delta_angleLevel.xlsx");
+}
+
+/* ---------- utility: ライフサイクルでグラフを定期更新する（万一描画が必要なとき） ---------- */
+setInterval(()=>{
+  // グラフを60fpsではなく定期的に更新（描画負荷を下げる）
+  drawGraph(1);
+  drawGraph(2);
+  // そして閾値判定（時間ベースで確実にチェック）
+  if(isCalibrated) checkThresholds();
+}, 200);
+
+/* ---------- 初期描画（空データ） ---------- */
+drawGraph(1);
+drawGraph(2);
+
+</script>
 </body>
 </html>
