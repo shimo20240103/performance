@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<title>M5StickC 足組みデータ取得（実験用）</title>
+<style>
+body { font-family: 'Arial', sans-serif; background:#eaf7f3; color:#004d40; text-align:center; margin:0; padding:0; transition: background 0.3s; }
+h1 { background:#a7ffeb; margin:0; padding:18px 0; border-bottom-left-radius:14px; border-bottom-right-radius:14px; }
+.controls { margin:12px 0; }
+button { font-size:15px; padding:8px 16px; margin:6px; border-radius:8px; border:none; background:#26a69a; color:#fff; cursor:pointer;}
+#status1,#status2 { margin-top:10px; font-weight:bold; font-size:18px; display:block; }
+pre { display:inline-block; background:#b2dfdb; padding:8px 14px; border-radius:10px; margin-top:10px; }
+#countdownDisplay { font-size: 120px; font-weight: bold; color: #0d0d0d; margin: 30px 0; }
+#currentPhaseDisplay { font-size: 24px; font-weight:bold; margin-top:20px; }
+</style>
+<script src="https://cdn.jsdelivr.net/npm/xlsx/dist/xlsx.full.min.js"></script>
+</head>
+<body>
+
+<h1>M5StickC 足組みデータ取得（実験用）</h1>
+
+<div class="controls">
+  <button id="connectBtn1" onclick="connect(1)">右足 接続</button>
+  <button id="connectBtn2" onclick="connect(2)">左足 接続</button>
+  <button onclick="downloadExcel()">Excelダウンロード</button>
+</div>
+
+<div id="status1">右足: 未接続</div>
+<pre id="values1">Pitch:0.00 Roll:0.00</pre>
+
+<div id="status2">左足: 未接続</div>
+<pre id="values2">Pitch:0.00 Roll:0.00</pre>
+
+<!-- 実験ボタン群 -->
+<div class="controls">
+  <button onclick="runSequence('right','45')">右: N → 45 → rest</button>
+  <button onclick="runSequence('right','90')">右: N → 90 → rest</button>
+  <button onclick="runSequence('left','45')">左: N → 45 → rest</button>
+  <button onclick="runSequence('left','90')">左: N → 90 → rest</button>
+</div>
+
+<!-- フェーズとカウントダウン表示 -->
+<div id="currentPhaseDisplay">現在のフェーズ: idle</div>
+<div id="countdownDisplay"></div>
+
+<script>
+/* BLE UUID */
+const serviceUUID = "4fafc201-1fb5-459e-8fcc-c5c9c331914b";
+const charUUID = "beb5483e-36e1-4688-b7f5-ea073f74076a";
+
+/* 最新 pitch/roll */
+let latestRight = [0,0];
+let latestLeft = [0,0];
+
+/* Excel用データ */
+let accelData = [["Time","Right_P","Right_R","Rvector","Left_P","Left_R","Lvector","Phase"]];
+let currentPhase = "idle";
+
+/* ベクトル計算 */
+function vector(p,r){ return Math.sqrt(p*p + r*r); }
+
+/* BLE接続 */
+async function connect(id){
+    const btn = document.getElementById("connectBtn"+id);
+    btn.disabled = true;
+    try{
+        const device = await navigator.bluetooth.requestDevice({
+            acceptAllDevices:true,
+            optionalServices:[serviceUUID]
+        });
+        const server = await device.gatt.connect();
+        const service = await server.getPrimaryService(serviceUUID);
+        const char = await service.getCharacteristic(charUUID);
+        await char.startNotifications();
+        char.addEventListener("characteristicvaluechanged", e=>{
+            const value = new TextDecoder().decode(e.target.value).trim();
+            const parts = value.split(",");
+            if(parts.length >= 2){
+                const pitch = parseFloat(parts[0]);
+                const roll = parseFloat(parts[1]);
+                if(id === 1){
+                    latestRight = [pitch, roll];
+                    document.getElementById("values1").textContent = `Pitch:${pitch.toFixed(2)} Roll:${roll.toFixed(2)}`;
+                }else{
+                    latestLeft = [pitch, roll];
+                    document.getElementById("values2").textContent = `Pitch:${pitch.toFixed(2)} Roll:${roll.toFixed(2)}`;
+                }
+                const Rvec = vector(latestRight[0], latestRight[1]);
+                const Lvec = vector(latestLeft[0], latestLeft[1]);
+                accelData.push([
+                    new Date().toLocaleTimeString(),
+                    latestRight[0], latestRight[1], Rvec,
+                    latestLeft[0], latestLeft[1], Lvec,
+                    currentPhase
+                ]);
+            }
+        });
+        document.getElementById("status"+id).textContent = `${id===1?"右":"左"}足 接続完了`;
+    }catch(e){
+        alert("接続失敗: "+e);
+        btn.disabled = false;
+    }
+}
+
+/* ビープ音 */
+function playBeep(){
+    try{
+        const ctx = new (window.AudioContext || window.webkitAudioContext)();
+        const o = ctx.createOscillator();
+        const g = ctx.createGain();
+        o.type = 'sine';
+        o.frequency.value = 880;
+        o.connect(g);
+        g.connect(ctx.destination);
+        o.start();
+        g.gain.setValueAtTime(0.0001, ctx.currentTime);
+        g.gain.exponentialRampToValueAtTime(0.3, ctx.currentTime + 0.01);
+        setTimeout(()=>{ o.stop(); ctx.close(); }, 250);
+    }catch(e){}
+}
+
+/* カウントダウン */
+function startCountdown(sec){
+    const display = document.getElementById("countdownDisplay");
+    playBeep(); // 開始ビープ
+    display.textContent = sec + "秒";
+    const timer = setInterval(()=>{
+        sec--;
+        if(sec <= 0){
+            clearInterval(timer);
+            display.textContent = "完了!";
+            playBeep(); // 終了ビープ
+        } else {
+            display.textContent = sec + "秒";
+        }
+    },1000);
+}
+
+/* フェーズ設定 */
+function setPhase(phase){
+    currentPhase = phase;
+    // 背景色変更
+    if(phase.includes('45') || phase.includes('90')){
+        document.body.style.background = '#ff5555';
+    } else {
+        document.body.style.background = '#eaf7f3';
+    }
+    // 画面表示
+    const phaseDisplay = document.getElementById("currentPhaseDisplay");
+    let side = phase.startsWith('R') ? '右足' : phase.startsWith('L') ? '左足' : '';
+    let action = phase.replace(/^R|L/, '');
+    phaseDisplay.textContent = `現在のフェーズ: ${side} : ${action}`;
+
+    startCountdown(10);
+}
+
+/* 実験シーケンス */
+function sleep(ms){ return new Promise(r=>setTimeout(r,ms)); }
+
+async function runSequence(side, target){
+    const buttons = document.querySelectorAll('button');
+    buttons.forEach(b=>b.disabled = true);
+
+    const prefix = side === 'left' ? 'L' : 'R';
+
+    setPhase(prefix+'N');
+    await sleep(10000);
+
+    setPhase(prefix+target); // 45または90
+    await sleep(10000);
+
+    setPhase(prefix+'rest');
+    await sleep(10000);
+
+    buttons.forEach(b=>b.disabled = false);
+}
+
+/* Excel出力 */
+function downloadExcel(){
+    const wb = XLSX.utils.book_new();
+    const ws = XLSX.utils.aoa_to_sheet(accelData);
+    XLSX.utils.book_append_sheet(wb, ws, "Data");
+    XLSX.writeFile(wb, "foot_data.xlsx");
+}
+</script>
+
+</body>
+</html>
