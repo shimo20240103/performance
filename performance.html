@@ -1,127 +1,165 @@
 <!DOCTYPE html>
 <html lang="ja">
 <head>
-  <meta charset="UTF-8" />
-  <title>M5StickC 足組み判定（Arduino判定版）</title>
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <style>
-    body {
-      font-family: Arial, sans-serif;
-      background:#eaf7f3;
-      color:#004d40;
-      text-align:center;
-      margin:0;
-      padding:16px;
-    }
-    h1 {
-      background:#a7ffeb;
-      padding:16px;
-      border-radius:12px;
-    }
-    button {
-      font-size:16px;
-      padding:10px 18px;
-      margin:10px;
-      border:none;
-      border-radius:10px;
-      background:#26a69a;
-      color:#fff;
-      cursor:pointer;
-    }
-    #status, #phase {
-      font-size:22px;
-      font-weight:bold;
-      margin-top:14px;
-    }
-    #phase {
-      font-size:48px;
-      padding:18px 28px;
-      border-radius:16px;
-      display:inline-block;
-      margin-top:20px;
-      background:#ffffff;
-    }
-    pre {
-      text-align:left;
-      max-width:420px;
-      margin:20px auto;
-      background:#b2dfdb;
-      padding:12px;
-      border-radius:10px;
-      font-size:14px;
-    }
-  </style>
-  <script src="https://cdn.jsdelivr.net/npm/xlsx/dist/xlsx.full.min.js"></script>
+<meta charset="UTF-8">
+<title>M5StickC 足組み判定（研究用 完全版）</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/xlsx/dist/xlsx.full.min.js"></script>
+
+<style>
+body{
+  font-family:Arial, sans-serif;
+  background:#eaf7f3;
+  color:#004d40;
+  text-align:center;
+  margin:0;
+  padding:16px;
+}
+h1{
+  background:#a7ffeb;
+  padding:12px;
+  border-radius:12px;
+}
+button{
+  font-size:15px;
+  padding:8px 14px;
+  margin:6px;
+  border:none;
+  border-radius:8px;
+  background:#26a69a;
+  color:white;
+  cursor:pointer;
+}
+.section{
+  background:#ffffff;
+  border-radius:14px;
+  padding:14px;
+  margin:14px auto;
+  max-width:720px;
+}
+.phase{
+  font-size:40px;
+  font-weight:bold;
+}
+canvas{
+  max-width:100%;
+}
+pre{
+  text-align:left;
+  background:#b2dfdb;
+  padding:10px;
+  border-radius:10px;
+  max-height:160px;
+  overflow:auto;
+}
+</style>
 </head>
+
 <body>
 
-<h1>M5StickC 足組み判定</h1>
+<h1>M5StickC 足組み判定（研究用）</h1>
 
-<button onclick="connect()">BLE 接続</button>
-<button onclick="downloadExcel()">Excel ダウンロード</button>
+<div class="section">
+  <button onclick="connect('R')">右足 接続</button>
+  <button onclick="connect('L')">左足 接続</button>
+  <button onclick="calibrate()">キャリブレーション</button>
+  <button onclick="downloadExcel()">Excel保存</button>
+</div>
 
-<div id="status">未接続</div>
+<div class="section">
+  <h2>状態</h2>
+  <div>右：<span id="phaseR" class="phase">—</span></div>
+  <div>左：<span id="phaseL" class="phase">—</span></div>
+</div>
 
-<div id="phase">—</div>
+<div class="section">
+  <h2>sita 角グラフ</h2>
+  <canvas id="chart"></canvas>
+</div>
 
-<pre id="log"></pre>
+<div class="section">
+  <h2>ログ</h2>
+  <pre id="log"></pre>
+</div>
 
 <script>
 /* ===== UUID ===== */
 const serviceUUID = "4fafc201-1fb5-459e-8fcc-c5c9c331914b";
 const charUUID    = "beb5483e-36e1-4688-b7f5-ea073f74076a";
 
-/* ===== ログ ===== */
-let logData = [["Time","Phase"]];
-const logEl = document.getElementById("log");
+/* ===== 状態 ===== */
+let offset = {R:0, L:0};
+let last   = {R:null, L:null};
+
+let logData = [["Time","Side","Sita","Phase"]];
+
+/* ===== グラフ ===== */
+const ctx = document.getElementById("chart").getContext("2d");
+const chart = new Chart(ctx,{
+  type:"line",
+  data:{
+    labels:[],
+    datasets:[
+      {label:"Right sita", data:[], borderWidth:2},
+      {label:"Left sita",  data:[], borderWidth:2}
+    ]
+  },
+  options:{
+    animation:false,
+    scales:{
+      y:{min:0,max:130}
+    }
+  }
+});
 
 /* ===== BLE 接続 ===== */
-async function connect(){
-  try{
-    const device = await navigator.bluetooth.requestDevice({
-      acceptAllDevices:true,
-      optionalServices:[serviceUUID]
-    });
+async function connect(side){
+  const device = await navigator.bluetooth.requestDevice({
+    acceptAllDevices:true,
+    optionalServices:[serviceUUID]
+  });
+  const server = await device.gatt.connect();
+  const service = await server.getPrimaryService(serviceUUID);
+  const char = await service.getCharacteristic(charUUID);
 
-    const server = await device.gatt.connect();
-    const service = await server.getPrimaryService(serviceUUID);
-    const char = await service.getCharacteristic(charUUID);
-
-    await char.startNotifications();
-
-    document.getElementById("status").textContent = "接続中：通知待ち";
-
-    char.addEventListener("characteristicvaluechanged", e=>{
-      const phase = new TextDecoder().decode(e.target.value).trim();
-      updatePhase(phase);
-    });
-
-  } catch(err){
-    document.getElementById("status").textContent = "接続失敗: " + err;
-  }
+  await char.startNotifications();
+  char.addEventListener("characteristicvaluechanged", e=>{
+    const txt = new TextDecoder().decode(e.target.value).trim();
+    const [sita, phase] = txt.split(",");
+    update(side, parseFloat(sita), phase);
+  });
 }
 
-/* ===== 表示更新 ===== */
-function updatePhase(phase){
-  const phaseEl = document.getElementById("phase");
-  phaseEl.textContent = phase;
+/* ===== 更新 ===== */
+function update(side, sita, phase){
+  sita -= offset[side];
+  last[side] = sita;
 
-  // 色分け
-  if(phase === "90"){
-    phaseEl.style.background = "#FFAB91";
-  } else if(phase === "45"){
-    phaseEl.style.background = "#FFE082";
-  } else if(phase === "N"){
-    phaseEl.style.background = "#C5E1A5";
-  } else {
-    phaseEl.style.background = "#E0E0E0";
+  document.getElementById("phase"+side).textContent = phase;
+
+  const t = new Date().toLocaleTimeString();
+  logData.push([t, side, sita.toFixed(1), phase]);
+
+  chart.data.labels.push(t);
+  chart.data.datasets[side==="R"?0:1].data.push(sita);
+  if(chart.data.labels.length > 50){
+    chart.data.labels.shift();
+    chart.data.datasets.forEach(d=>d.data.shift());
   }
+  chart.update();
 
-  const time = new Date().toLocaleTimeString();
-  logData.push([time, phase]);
+  const log = logData.slice(-10)
+    .map(r=>`${r[0]} ${r[1]} ${r[2]}° ${r[3]}`)
+    .join("\n");
+  document.getElementById("log").textContent = log;
+}
 
-  logEl.textContent =
-    logData.slice(-10).map(r=>`${r[0]}  :  ${r[1]}`).join("\n");
+/* ===== キャリブレーション ===== */
+function calibrate(){
+  if(last.R!==null) offset.R = last.R;
+  if(last.L!==null) offset.L = last.L;
+  alert("キャリブレーション完了");
 }
 
 /* ===== Excel ===== */
@@ -129,7 +167,7 @@ function downloadExcel(){
   const wb = XLSX.utils.book_new();
   const ws = XLSX.utils.aoa_to_sheet(logData);
   XLSX.utils.book_append_sheet(wb, ws, "LegJudge");
-  XLSX.writeFile(wb, "leg_crossing_result.xlsx");
+  XLSX.writeFile(wb,"leg_judge_log.xlsx");
 }
 </script>
 
