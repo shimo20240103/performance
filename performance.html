@@ -2,329 +2,136 @@
 <html lang="ja">
 <head>
   <meta charset="UTF-8" />
-  <title>M5StickC 足組み判定</title>
+  <title>M5StickC 足組み判定（Arduino判定版）</title>
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <style>
-    body { font-family: 'Arial', sans-serif; background:#eaf7f3; color:#004d40; text-align:center; margin:0; padding:12px; }
-    h1 { background:#a7ffeb; margin:0 0 12px 0; padding:16px 0; border-radius:10px; }
-    .controls { margin:10px 0; }
-    button { font-size:14px; padding:8px 14px; margin:6px; border-radius:8px; border:none; background:#26a69a; color:#fff; cursor:pointer;}
-    #status1,#status2,#result,#styleLabel,#calibStatus { margin-top:8px; font-weight:bold; font-size:16px; display:block; }
-    pre { display:inline-block; background:#b2dfdb; padding:8px 14px; border-radius:10px; margin-top:10px; }
-    .infoRow{ display:flex; justify-content:center; gap:12px; margin-top:8px; flex-wrap:wrap;}
-    .infoBox{ background:#fff; padding:8px 12px; border-radius:8px; box-shadow:0 2px 6px rgba(0,0,0,0.06); min-width:140px; }
-    canvas{ border:2px solid #004D40; border-radius:8px; background:#e0f2f1; display:block; margin:8px auto; }
-    .graph-container{ margin:12px auto; width:90%; max-width:720px; }
-    #result { padding:8px 12px; border-radius:8px; background:#FFF; display:inline-block; }
-    #styleLabel { margin-top:6px; }
-    .small { font-size:13px; font-weight:normal; color:#004D40; }
+    body {
+      font-family: Arial, sans-serif;
+      background:#eaf7f3;
+      color:#004d40;
+      text-align:center;
+      margin:0;
+      padding:16px;
+    }
+    h1 {
+      background:#a7ffeb;
+      padding:16px;
+      border-radius:12px;
+    }
+    button {
+      font-size:16px;
+      padding:10px 18px;
+      margin:10px;
+      border:none;
+      border-radius:10px;
+      background:#26a69a;
+      color:#fff;
+      cursor:pointer;
+    }
+    #status, #phase {
+      font-size:22px;
+      font-weight:bold;
+      margin-top:14px;
+    }
+    #phase {
+      font-size:48px;
+      padding:18px 28px;
+      border-radius:16px;
+      display:inline-block;
+      margin-top:20px;
+      background:#ffffff;
+    }
+    pre {
+      text-align:left;
+      max-width:420px;
+      margin:20px auto;
+      background:#b2dfdb;
+      padding:12px;
+      border-radius:10px;
+      font-size:14px;
+    }
   </style>
   <script src="https://cdn.jsdelivr.net/npm/xlsx/dist/xlsx.full.min.js"></script>
 </head>
 <body>
-  <h1>M5StickC 足組み判定</h1>
 
-  <div class="controls">
-    <button id="connectBtn1" onclick="connect(1)">右足 接続</button>
-    <button id="connectBtn2" onclick="connect(2)">左足 接続</button>
-    <button onclick="startCalibration()">初期値キャリブレーション (10秒)</button>
-    <button onclick="downloadExcel()">Excelダウンロード</button>
-  </div>
+<h1>M5StickC 足組み判定</h1>
 
-  <div id="status1">右足: 未接続</div>
-  <pre id="values1">Pitch:0.00 Roll:0.00 Vec:0.00 Δ:0.00</pre>
+<button onclick="connect()">BLE 接続</button>
+<button onclick="downloadExcel()">Excel ダウンロード</button>
 
-  <div id="status2">左足: 未接続</div>
-  <pre id="values2">Pitch:0.00 Roll:0.00 Vec:0.00 Δ:0.00</pre>
+<div id="status">未接続</div>
 
-  <div id="calibStatus">初期値: 未キャリブレーション</div>
+<div id="phase">—</div>
 
-  <div id="result">状態: —</div>
-  <div id="styleLabel">組み方: —</div>
-
-  <div class="infoRow">
-    <div class="infoBox">判定条件（連続3秒）<div class="small">Δ > 20 → 45 / Δ > 50 → 90</div></div>
-  </div>
-
-  <div class="graph-container"><h3>右足 合成値（Vec）</h3><canvas id="graph1" width="720" height="140"></canvas></div>
-  <div class="graph-container"><h3>左足 合成値（Vec）</h3><canvas id="graph2" width="720" height="140"></canvas></div>
+<pre id="log"></pre>
 
 <script>
-/* ---------- 設定 ---------- */
+/* ===== UUID ===== */
 const serviceUUID = "4fafc201-1fb5-459e-8fcc-c5c9c331914b";
 const charUUID    = "beb5483e-36e1-4688-b7f5-ea073f74076a";
 
-const maxDataPoints = 300;
-const holdMs = 3000; // 3秒
-const thresh25 = 20;   // ★ここだけ変更（25→20）
-const thresh50 = 50;
+/* ===== ログ ===== */
+let logData = [["Time","Phase"]];
+const logEl = document.getElementById("log");
 
-/* 状態保存 */
-let devices = {};
-let latestRight = {pitch:0, roll:0};
-let latestLeft  = {pitch:0, roll:0};
-
-let dataVec = {1:[], 2:[]}; // 合成値配列（グラフ用）
-let timestamps = {1:[], 2:[]};
-let accelData = [["Time","Right_Pitch","Right_Roll","Right_Vec","Right_Δ","Left_Pitch","Left_Roll","Left_Vec","Left_Δ","angleLevel"]];
-
-let calibRight = {pitch:0, roll:0, vec:0};
-let calibLeft  = {pitch:0, roll:0, vec:0};
-let isCalibrated = false;
-
-/* 連続判定用タイムスタンプ */
-let exceedStart = {
-  1: {over20: null, over50: null},
-  2: {over20: null, over50: null}
-};
-
-/* ---------- BLE 接続 ---------- */
-async function connect(id){
-  const btn = document.getElementById("connectBtn"+id);
-  btn.disabled = true;
+/* ===== BLE 接続 ===== */
+async function connect(){
   try{
     const device = await navigator.bluetooth.requestDevice({
       acceptAllDevices:true,
       optionalServices:[serviceUUID]
     });
-    devices[id] = device;
+
     const server = await device.gatt.connect();
     const service = await server.getPrimaryService(serviceUUID);
     const char = await service.getCharacteristic(charUUID);
+
     await char.startNotifications();
+
+    document.getElementById("status").textContent = "接続中：通知待ち";
+
     char.addEventListener("characteristicvaluechanged", e=>{
-      const text = new TextDecoder().decode(e.target.value).trim();
-      const parts = text.split(",").map(s=>s.trim());
-      if(parts.length >= 2){
-        const p = parseFloat(parts[0]) || 0;
-        const r = parseFloat(parts[1]) || 0;
-        if(id === 1){
-          latestRight.pitch = p; latestRight.roll = r;
-          updateRight();
-        } else {
-          latestLeft.pitch = p; latestLeft.roll = r;
-          updateLeft();
-        }
-
-        const rightVec = vecFrom(latestRight.pitch, latestRight.roll);
-        const leftVec  = vecFrom(latestLeft.pitch, latestLeft.roll);
-        const rightΔ = isCalibrated ? rightVec - calibRight.vec : 0;
-        const leftΔ  = isCalibrated ? leftVec  - calibLeft.vec  : 0;
-
-        accelData.push([
-          new Date().toLocaleTimeString(),
-          latestRight.pitch, latestRight.roll, rightVec.toFixed(3), rightΔ.toFixed(3),
-          latestLeft.pitch, latestLeft.roll, leftVec.toFixed(3), leftΔ.toFixed(3),
-          getCurrentAngleLabel()
-        ]);
-
-        checkThresholds();
-      }
+      const phase = new TextDecoder().decode(e.target.value).trim();
+      updatePhase(phase);
     });
-    document.getElementById("status"+id).textContent = `:✓: ${id===1 ? "右足" : "左足"} 接続成功`;
+
   } catch(err){
-    document.getElementById("status"+id).textContent = ":✕: 接続失敗: " + (err?.message || err);
-    btn.disabled = false;
+    document.getElementById("status").textContent = "接続失敗: " + err;
   }
 }
 
-/* ---------- 合成値 ---------- */
-function vecFrom(p, r){
-  return Math.hypot(p, r);
-}
+/* ===== 表示更新 ===== */
+function updatePhase(phase){
+  const phaseEl = document.getElementById("phase");
+  phaseEl.textContent = phase;
 
-/* ---------- 更新表示（右/左） ---------- */
-function updateRight(){
-  const p = latestRight.pitch, r = latestRight.roll;
-  const v = vecFrom(p,r);
-  dataVec[1].push(v);
-  timestamps[1].push(Date.now());
-  if(dataVec[1].length > maxDataPoints){ dataVec[1].shift(); timestamps[1].shift(); }
-  const delta = isCalibrated ? (v - calibRight.vec) : 0;
-  document.getElementById("values1").textContent =
-    `Pitch:${p.toFixed(2)} Roll:${r.toFixed(2)} Vec:${v.toFixed(2)} Δ:${delta.toFixed(2)}`;
-  drawGraph(1);
-}
-
-function updateLeft(){
-  const p = latestLeft.pitch, r = latestLeft.roll;
-  const v = vecFrom(p,r);
-  dataVec[2].push(v);
-  timestamps[2].push(Date.now());
-  if(dataVec[2].length > maxDataPoints){ dataVec[2].shift(); timestamps[2].shift(); }
-  const delta = isCalibrated ? (v - calibLeft.vec) : 0;
-  document.getElementById("values2").textContent =
-    `Pitch:${p.toFixed(2)} Roll:${r.toFixed(2)} Vec:${v.toFixed(2)} Δ:${delta.toFixed(2)}`;
-  drawGraph(2);
-}
-
-/* ---------- キャリブレーション ---------- */
-function startCalibration(){
-  const calibSec = 10;
-  let sec = calibSec;
-  document.getElementById("calibStatus").textContent = `キャリブレーション開始… ${sec}秒`;
-  let samplesR = [], samplesL = [];
-  const timer = setInterval(()=>{
-    sec--;
-    samplesR.push([latestRight.pitch, latestRight.roll]);
-    samplesL.push([latestLeft.pitch, latestLeft.roll]);
-    document.getElementById("calibStatus").textContent = `キャリブレーション中… ${sec}秒`;
-    if(sec <= 0){
-      clearInterval(timer);
-      if(samplesR.length){
-        const ap = avg(samplesR.map(s=>s[0]));
-        const ar = avg(samplesR.map(s=>s[1]));
-        calibRight.pitch = ap; calibRight.roll = ar; calibRight.vec = vecFrom(ap,ar);
-      }
-      if(samplesL.length){
-        const ap = avg(samplesL.map(s=>s[0]));
-        const ar = avg(samplesL.map(s=>s[1]));
-        calibLeft.pitch = ap; calibLeft.roll = ar; calibLeft.vec = vecFrom(ap,ar);
-      }
-      isCalibrated = true;
-      document.getElementById("calibStatus").textContent =
-        `初期値設定完了：右(vec:${calibRight.vec.toFixed(2)}) / 左(vec:${calibLeft.vec.toFixed(2)})`;
-
-      exceedStart = {
-        1: {over20: null, over50: null},
-        2: {over20: null, over50: null}
-      };
-    }
-  }, 1000);
-}
-
-function avg(arr){ return arr.reduce((a,b)=>a+b,0)/arr.length; }
-
-/* ---------- 判定ロジック ---------- */
-function checkThresholds(){
-  if(!isCalibrated){
-    document.getElementById("result").textContent = "状態: キャリブレーション未実施";
-    document.getElementById("styleLabel").textContent = "組み方: —";
-    return;
-  }
-
-  const now = Date.now();
-  const rightVec = vecFrom(latestRight.pitch, latestRight.roll);
-  const leftVec  = vecFrom(latestLeft.pitch, latestLeft.roll);
-
-  const rightΔ = rightVec - calibRight.vec;
-  const leftΔ  = leftVec - calibLeft.vec;
-
-  /* --- 閾値50 --- */
-  if(rightΔ > thresh50){
-    if(!exceedStart[1].over50) exceedStart[1].over50 = now;
-  } else { exceedStart[1].over50 = null; }
-
-  if(leftΔ > thresh50){
-    if(!exceedStart[2].over50) exceedStart[2].over50 = now;
-  } else { exceedStart[2].over50 = null; }
-
-  /* --- 閾値20（45°） --- */
-  if(rightΔ > thresh25){
-    if(!exceedStart[1].over20) exceedStart[1].over20 = now;
-  } else { exceedStart[1].over20 = null; }
-
-  if(leftΔ > thresh25){
-    if(!exceedStart[2].over20) exceedStart[2].over20 = now;
-  } else { exceedStart[2].over20 = null; }
-
-  /* --- 判定 --- */
-  let labels = [];
-
-  // ★90° 優先
-  if(exceedStart[1].over50 && (now - exceedStart[1].over50 >= holdMs)){
-    labels.push({side:"右", level:90});
-  }
-  if(exceedStart[2].over50 && (now - exceedStart[2].over50 >= holdMs)){
-    labels.push({side:"左", level:90});
-  }
-
-  // ★50が無ければ45°を見る
-  if(labels.length === 0){
-    if(exceedStart[1].over20 && (now - exceedStart[1].over20 >= holdMs)){
-      labels.push({side:"右", level:45});
-    }
-    if(exceedStart[2].over20 && (now - exceedStart[2].over20 >= holdMs)){
-      labels.push({side:"左", level:45});
-    }
-  }
-
-  /* --- 表示 --- */
-  const resultEl = document.getElementById("result");
-  const styleEl  = document.getElementById("styleLabel");
-
-  if(labels.length === 0){
-    resultEl.textContent = "状態: 足を組んでいません";
-    resultEl.style.background = "#C8E6C9";
-    styleEl.textContent = "組み方: —";
+  // 色分け
+  if(phase === "90"){
+    phaseEl.style.background = "#FFAB91";
+  } else if(phase === "45"){
+    phaseEl.style.background = "#FFE082";
+  } else if(phase === "N"){
+    phaseEl.style.background = "#C5E1A5";
   } else {
-    const txt = labels.map(l=>`${l.side} ${l.level}`).join(" / ");
-    resultEl.textContent = `状態: 足を組んでいます (${txt})`;
-    resultEl.style.background = "#FFCCBC";
-    styleEl.textContent = `組み方: ${txt}`;
+    phaseEl.style.background = "#E0E0E0";
   }
+
+  const time = new Date().toLocaleTimeString();
+  logData.push([time, phase]);
+
+  logEl.textContent =
+    logData.slice(-10).map(r=>`${r[0]}  :  ${r[1]}`).join("\n");
 }
 
-function getCurrentAngleLabel(){
-  return document.getElementById("styleLabel").textContent;
-}
-
-/* ---------- グラフ描画 ---------- */
-function drawGraph(id){
-  const canvas = document.getElementById("graph"+id);
-  const ctx = canvas.getContext("2d");
-  const w = canvas.width, h = canvas.height;
-  ctx.clearRect(0,0,w,h);
-
-  ctx.fillStyle = "#E0F2F1";
-  ctx.fillRect(0,0,w,h);
-
-  ctx.strokeStyle = "#004D40";
-  ctx.beginPath();
-  ctx.moveTo(0, h/2);
-  ctx.lineTo(w, h/2);
-  ctx.stroke();
-
-  const data = dataVec[id];
-  if(!data || data.length < 2) return;
-
-  const maxVal = Math.max(...data.map(v=>Math.abs(v)), 1);
-  const padding = 8;
-  const scale = (h/2 - padding) / maxVal;
-
-  ctx.strokeStyle = (id===1) ? "#FF5252" : "#2979FF";
-  ctx.lineWidth = 2;
-  ctx.beginPath();
-
-  for(let i=0;i<data.length;i++){
-    const x = (i/(maxDataPoints-1)) * w;
-    const y = h/2 - (data[i] * scale);
-    if(i===0) ctx.moveTo(x,y); else ctx.lineTo(x,y);
-  }
-  ctx.stroke();
-
-  ctx.fillStyle = "#004D40";
-  ctx.font = "12px Arial";
-  ctx.fillText(`Vec: ${data[data.length-1].toFixed(2)}`, 8, 14);
-}
-
-/* ---------- Excel ---------- */
+/* ===== Excel ===== */
 function downloadExcel(){
   const wb = XLSX.utils.book_new();
-  const ws = XLSX.utils.aoa_to_sheet(accelData);
-  XLSX.utils.book_append_sheet(wb, ws, "PitchRoll");
-  XLSX.writeFile(wb, "accel_vec_delta_angleLevel.xlsx");
+  const ws = XLSX.utils.aoa_to_sheet(logData);
+  XLSX.utils.book_append_sheet(wb, ws, "LegJudge");
+  XLSX.writeFile(wb, "leg_crossing_result.xlsx");
 }
-
-/* ---------- update loop ---------- */
-setInterval(()=>{
-  drawGraph(1);
-  drawGraph(2);
-  if(isCalibrated) checkThresholds();
-}, 200);
-
-drawGraph(1);
-drawGraph(2);
 </script>
+
 </body>
 </html>
