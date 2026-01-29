@@ -88,9 +88,9 @@ let logData = [["Time","Side","Sita","DeltaSita","Phase"]];
 
 /* ===== 判定関数 ===== */
 function judgePhase(deltaSita){
-  if (deltaSita >= 21 && deltaSita <= 50) return "45";
-  if (deltaSita >= 51 && deltaSita <= 120) return "90";
-  return "N";
+  if (deltaSita >= 21 && deltaSita <= 50) return "浅い足組み";
+  if (deltaSita >= 51 && deltaSita <= 120) return "深い足組み";
+  return "通常座位";
 }
 
 /* ===== BLE 接続 ===== */
