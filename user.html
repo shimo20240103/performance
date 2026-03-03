@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>講習管理</title>
+
+<style>
+body{
+  font-family: "Segoe UI", sans-serif;
+  background: #f4f6f9;
+  margin: 0;
+}
+
+.container{
+  max-width: 800px;
+  margin: 40px auto;
+  padding: 20px;
+}
+
+.card{
+  background: white;
+  padding: 20px;
+  border-radius: 15px;
+  box-shadow: 0 6px 18px rgba(0,0,0,0.1);
+  margin-bottom: 20px;
+}
+
+h1{
+  text-align: center;
+}
+
+select{
+  padding: 10px;
+  border-radius: 8px;
+  border: 1px solid #ccc;
+  width: 100%;
+}
+
+.course-title{
+  font-weight: bold;
+  font-size: 18px;
+}
+
+.deadline{
+  font-size: 14px;
+  margin-top: 5px;
+}
+
+.deadline.urgent{
+  color: red;
+  font-weight: bold;
+}
+
+.checkbox{
+  margin-top: 10px;
+  transform: scale(1.3);
+}
+</style>
+</head>
+
+<body>
+
+<div class="container">
+
+<h1>📚 講習受講チェック</h1>
+
+<select id="nameSelect"></select>
+
+<div id="courseList"></div>
+
+</div>
+
+<script>
+let data={
+  employees:["花岡","宮下","平良","清水","橋場","齊藤","鈴木","下崎","塩崎","竹ノ内"],
+  courses:[
+    {
+      name:"【Samsung Galaxy S26/S26+】商品概要＆テスト【2602-21】",
+      deadline:"2026-03-02",
+      status:{}
+    }
+  ]
+};
+
+const select=document.getElementById("nameSelect");
+
+data.employees.forEach(emp=>{
+  const option=document.createElement("option");
+  option.value=emp;
+  option.text=emp;
+  select.appendChild(option);
+});
+
+select.onchange=showCourses;
+
+function showCourses(){
+  const name=select.value;
+  const div=document.getElementById("courseList");
+  div.innerHTML="";
+
+  data.courses.forEach((course,index)=>{
+
+    const today=new Date();
+    const deadline=new Date(course.deadline);
+    const diff=(deadline-today)/(1000*60*60*24);
+
+    const urgentClass = diff <=3 ? "deadline urgent" : "deadline";
+    const checked=course.status[name]?"checked":"";
+
+    div.innerHTML+=`
+    <div class="card">
+      <div class="course-title">${course.name}</div>
+      <div class="${urgentClass}">
+        期日：${course.deadline}
+      </div>
+      <input type="checkbox" class="checkbox"
+        ${checked}
+        onchange="updateStatus(${index},this.checked)">
+        受講済み
+    </div>
+    `;
+  });
+}
+
+function updateStatus(index,value){
+  const name=select.value;
+  data.courses[index].status[name]=value;
+  alert("更新しました（※保存機能は未実装）");
+}
+
+showCourses();
+</script>
+
+</body>
+</html>
