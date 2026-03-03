@@ -6,150 +6,92 @@
 <title>講習管理（管理者）</title>
 
 <style>
-body{
-  font-family: "Segoe UI", sans-serif;
-  background: #f4f6f9;
-  margin: 0;
-}
-
-.container{
-  max-width: 800px;
-  margin: 40px auto;
-  background: white;
-  padding: 30px;
-  border-radius: 15px;
-  box-shadow: 0 8px 20px rgba(0,0,0,0.1);
-}
-
-h1{
-  text-align: center;
-  color: #333;
-}
-
-.section{
-  margin-bottom: 30px;
-}
-
-input, button{
-  padding: 10px;
-  margin-top: 5px;
-  border-radius: 8px;
-  border: 1px solid #ddd;
-}
-
-button{
-  background: #0066ff;
-  color: white;
-  border: none;
-  cursor: pointer;
-}
-
-button:hover{
-  background: #004dcc;
-}
-
-.employee-list{
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-
-.employee-tag{
-  background: #e9f2ff;
-  padding: 6px 10px;
-  border-radius: 20px;
-  font-size: 14px;
-}
-
-pre{
-  background: #f0f0f0;
-  padding: 10px;
-  border-radius: 10px;
-  overflow-x: auto;
-}
+body{font-family:sans-serif;background:#f4f6f9;margin:0;}
+.container{max-width:900px;margin:40px auto;background:white;padding:30px;border-radius:15px;box-shadow:0 8px 20px rgba(0,0,0,0.1);}
+h2{margin-top:0;}
+input,button{padding:10px;border-radius:8px;border:1px solid #ddd;}
+button{background:#0066ff;color:white;border:none;cursor:pointer;}
+button:hover{background:#004dcc;}
+.course{background:#f9f9f9;padding:15px;margin-top:10px;border-radius:10px;display:flex;justify-content:space-between;align-items:center;}
+.delete{background:red;border:none;color:white;border-radius:50%;width:28px;height:28px;cursor:pointer;font-weight:bold;}
 </style>
 </head>
 
 <body>
-
 <div class="container">
+<h2>📋 講座追加</h2>
 
-<h1>📋 講習管理（管理者）</h1>
+<input type="text" id="name" placeholder="講座名" style="width:100%"><br><br>
+<input type="date" id="deadline">
+<button onclick="addCourse()">追加</button>
 
-<div class="section">
-<h3>講座追加</h3>
-講座名<br>
-<input type="text" id="course" style="width:100%"><br><br>
-期日<br>
-<input type="date" id="deadline"><br><br>
-<button onclick="addCourse()">追加する</button>
-</div>
-
-<div class="section">
-<h3>社員追加</h3>
-<input type="text" id="employee">
-<button onclick="addEmployee()">追加</button>
-
-<div class="employee-list" id="employeeList"></div>
-</div>
-
-<div class="section">
-<h3>現在のデータ</h3>
-<pre id="output"></pre>
-</div>
-
+<h2>📚 講座一覧</h2>
+<div id="courseList"></div>
 </div>
 
 <script>
-let data = {
-  employees:["花岡","宮下","平良","清水","橋場","齊藤","鈴木","下崎","塩崎","竹ノ内"],
-  courses:[]
-};
+const API_URL = "https://script.google.com/macros/s/AKfycbyXrQYPQOG83kJuzv5pcr8TVpxgpcO2JUj0EM15LHBY49-1EAnYggQh_F0VUts_PgSJ/exec";
 
-function renderEmployees(){
-  const list = document.getElementById("employeeList");
-  list.innerHTML="";
-  data.employees.forEach(emp=>{
-    list.innerHTML += `<div class="employee-tag">${emp}</div>`;
-  });
+async function fetchData(){
+  const res = await fetch(API_URL);
+  return await res.json();
 }
 
-function addCourse(){
-  const course = document.getElementById("course").value;
-  const deadline = document.getElementById("deadline").value;
+async function addCourse(){
+  const name=document.getElementById("name").value;
+  const deadline=document.getElementById("deadline").value;
 
-  if(!course || !deadline){
+  if(!name || !deadline){
     alert("入力してください");
     return;
   }
 
-  data.courses.push({
-    name:course,
-    deadline:deadline,
-    status:{}
+  await fetch(API_URL,{
+    method:"POST",
+    body:JSON.stringify({
+      action:"addCourse",
+      name,
+      deadline
+    })
   });
 
-  alert("講座を追加しました");
-  showData();
+  document.getElementById("name").value="";
+  loadCourses();
 }
 
-function addEmployee(){
-  const name = document.getElementById("employee").value;
-  if(!name) return;
+async function deleteCourse(id){
+  if(!confirm("削除しますか？")) return;
 
-  data.employees.push(name);
-  renderEmployees();
-  showData();
+  await fetch(API_URL,{
+    method:"POST",
+    body:JSON.stringify({
+      action:"deleteCourse",
+      id
+    })
+  });
+
+  loadCourses();
 }
 
-function showData(){
-  document.getElementById("output").textContent =
-    JSON.stringify(data,null,2);
+async function loadCourses(){
+  const data = await fetchData();
+  const div=document.getElementById("courseList");
+  div.innerHTML="";
+
+  data.courses.forEach(course=>{
+    div.innerHTML+=`
+      <div class="course">
+        <div>
+          <strong>${course[1]}</strong><br>
+          期日：${course[2]}
+        </div>
+        <button class="delete" onclick="deleteCourse(${course[0]})">×</button>
+      </div>
+    `;
+  });
 }
 
-renderEmployees();
-showData();
+loadCourses();
 </script>
-
 </body>
 </html>
